@@ -13,5 +13,7 @@ pages/
 media/
 todo.md
 venv/
+venv-lxml/
 #*#
 .#*
+venv-py3/

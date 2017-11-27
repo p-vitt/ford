@@ -26,10 +26,6 @@
 from __future__ import print_function
 from contextlib import contextmanager
 import sys
-if (sys.version_info[0]>2):
-    from io import StringIO
-else:
-    from StringIO import StringIO
 import argparse
 import markdown
 import os
@@ -43,11 +39,16 @@ from ford.mdx_mathjax import MathJaxExtension
 import ford.utils
 import ford.pagetree
 
+if (sys.version_info[0] > 2):
+    from io import StringIO
+else:
+    from StringIO import StringIO
+
 __appname__    = "FORD"
-__author__     = "Chris MacMackin, Jacob Williams, Marco Restelli, Iain Barrass, Jérémie Burgalat"
+__author__     = "Chris MacMackin, Jacob Williams, Marco Restelli, Iain Barrass, Jérémie Burgalat, Stephen J. Turnbull, Balint Aradi"
 __credits__    = ["Stefano Zhagi", "Izaak Beekman", "Gavin Huttley"]
 __license__    = "GPLv3"
-__version__    = "4.5.2"
+__version__    = "5.0.6"
 __maintainer__ = "Chris MacMackin"
 __status__     = "Production"
 
@@ -82,14 +83,21 @@ def initialize():
     Method to parse and check configurations of FORD, get the project's 
     global documentation, and create the Markdown reader.
     """
+    try:
+        import multiprocessing
+        ncpus = '{0}'.format(multiprocessing.cpu_count())
+    except (ImportError, NotImplementedError):
+        ncpus = '0'
+
     # Setup the command-line options and parse them.
     parser = argparse.ArgumentParser(description="Document a program or library written in modern Fortran. Any command-line options over-ride those specified in the project file.")
     parser.add_argument("project_file",help="file containing the description and settings for the project",
                         type=argparse.FileType('r'))
-    parser.add_argument("-d","--project_dir",action="append",help='directories containing all source files for the project')
+    parser.add_argument("-d","--src_dir",action="append",help='directories containing all source files for the project')
     parser.add_argument("-p","--page_dir",help="directory containing the optional page tree describing the project")
     parser.add_argument("-o","--output_dir",help="directory in which to place output files")
     parser.add_argument("-s","--css",help="custom style-sheet for the output")
+    parser.add_argument("-r","--revision",dest="revision",help="Source code revision the project to document")
     parser.add_argument("--exclude",action="append",help="any files which should not be included in the documentation")
     parser.add_argument("--exclude_dir",action="append",help="any directories whose contents should not be included in the documentation")
     parser.add_argument("-e","--extensions",action="append",help="extensions which should be scanned for documentation (default: f90, f95, f03, f08)")
@@ -104,11 +112,13 @@ def initialize():
                         version="{}, version {}".format(__appname__,__version__))
     parser.add_argument("--debug",dest="dbg",action="store_true",
                         help="display traceback if fatal exception occurs")
+    parser.add_argument("-I","--include",action="append",
+                        help="any directories which should be searched for include files")
     # Get options from command-line
     args = parser.parse_args()
     # Set up Markdown reader
     md_ext = ['markdown.extensions.meta','markdown.extensions.codehilite',
-              'markdown.extensions.extra',MathJaxExtension()]
+              'markdown.extensions.extra',MathJaxExtension(),'md_environ.environ']
     md = markdown.Markdown(extensions=md_ext, output_format="html5",
     extension_configs={})
     # Read in the project-file. This will contain global documentation (which
@@ -129,7 +139,8 @@ def initialize():
     proj_data = md.Meta
     md.reset()
     # Get the default options, and any over-rides, straightened out
-    options = ['project_dir','extensions','output_dir','css','exclude',
+    options = ['src_dir','extensions','fpp_extensions','fixed_extensions',
+               'output_dir','css','exclude', 'external', 'externalize',
                'project','author','author_description','author_pic',
                'summary','github','bitbucket','facebook','twitter',
                'google_plus','linkedin','email','website','project_github',
@@ -138,11 +149,15 @@ def initialize():
                'year','docmark','predocmark','docmark_alt','predocmark_alt',
                'media_dir','favicon','warn','extra_vartypes','page_dir',
                'source','exclude_dir','macro','include','preprocess','quiet',
-               'search','lower','sort','extra_mods','dbg','graph', 'license',
-               'extra_filetypes', 'creation_date', 'print_creation_date']
-    defaults = {'project_dir':         ['./src'],
-                'extensions':          ['f90','f95','f03','f08','f15','F90',
-                                        'F95','F03','F08','F15'],
+               'search','lower','sort','extra_mods','dbg','graph',
+               'graph_mindepth', 'graph_maxdepth', 'graph_maxnodes',
+               'license','extra_filetypes','preprocessor','creation_date',
+               'print_creation_date','proc_internals','coloured_edges',
+               'graph_dir','gitter_sidecar','mathjax_config','parallel','revision']
+    defaults = {'src_dir':             ['./src'],
+                'extensions':          ['f90','f95','f03','f08','f15'],
+                'fpp_extensions':      ['F90','F95','F03','F08','F15','F','FOR'],
+                'fixed_extensions':    ['f','for','F','FOR'],
                 'output_dir':          './doc',
                 'project':             'Fortran Program',
                 'project_url':         '',
@@ -150,6 +165,8 @@ def initialize():
                 'year':                date.today().year,
                 'exclude':             [],
                 'exclude_dir':         [],
+                'external':            [],
+                'externalize':         'false',
                 'docmark':             '!',
                 'docmark_alt':         '*',
                 'predocmark':          '>',
@@ -160,22 +177,35 @@ def initialize():
                 'macro':               [],
                 'include':             [],
                 'preprocess':          'true',
+                'preprocessor':        '',
+                'proc_internals':      'false',
                 'warn':                'false',
                 'quiet':               'false',
                 'search':              'true',
                 'lower':               'false',
                 'sort':                'src',
                 'extra_mods':          [],
-                'dbg':                 False,
+                'dbg':                 True,
                 'graph':               'false',
+                'graph_mindepth':      '0',
+                'graph_maxdepth':      '10000',
+                'graph_maxnodes':      '1000000000',
                 'license':             '',
                 'extra_filetypes':     [],
                 'creation_date':       '%Y-%m-%dT%H:%M:%S.%f%z',
-                'print_creation_date': False,
+                'print_creation_date': 'false',
+                'coloured_edges':      'false',
+                'parallel':            ncpus,
                }
-    listopts = ['extensions','display','extra_vartypes','project_dir',
-                'exclude','exclude_dir','macro','include','extra_mods',
-                'extra_filetypes']
+    listopts = ['extensions','fpp_extensions','fixed_extensions','display',
+                'extra_vartypes','src_dir','exclude','exclude_dir',
+                'macro','include','extra_mods','extra_filetypes','external']
+    # Evaluate paths relative to project file location
+    base_dir = os.path.abspath(os.path.dirname(args.project_file.name))
+    proj_data['base_dir'] = base_dir
+    for var in ['src_dir','page_dir','output_dir','exclude_dir','graph_dir','media_dir','include','favicon','css','mathjax_config']:
+        if var in proj_data:
+            proj_data[var] = [os.path.normpath(os.path.join(base_dir,os.path.expanduser(os.path.expandvars(p)))) for p in proj_data[var]]
     if args.warn:
         args.warn = 'true'
     else:
@@ -202,6 +232,7 @@ def initialize():
     proj_data['creation_date'] = datetime.now().strftime(proj_data['creation_date'])
     relative = (proj_data['project_url'] == '')
     proj_data['relative'] = relative
+    proj_data['extensions'] += [ext for ext in proj_data['fpp_extensions'] if ext not in proj_data['extensions']]
     # Parse file extensions and comment characters for extra filetypes
     extdict = {}
     for ext in proj_data['extra_filetypes']:
@@ -209,8 +240,8 @@ def initialize():
         if len(sp) < 2: continue
         extdict[sp[0]] = sp[1]
     proj_data['extra_filetypes'] = extdict
-    # Make sure no project_dir is contained within output_dir
-    for projdir in proj_data['project_dir']:
+    # Make sure no src_dir is contained within output_dir
+    for projdir in proj_data['src_dir']:
         proj_path = ford.utils.split_path(projdir)
         out_path  = ford.utils.split_path(proj_data['output_dir'])
         for directory in out_path:
@@ -241,14 +272,38 @@ def initialize():
     if proj_data['predocmark'] == proj_data['predocmark_alt'] != '':
         print('Error: predocmark and predocmark_alt are the same.')
         sys.exit(1)
-    # Check that gfortrran is present for preprocessing
-    try:
-        devnull = open(os.devnull)
-        subprocess.Popen(["gfortran","--version"], stdout=devnull, stderr=devnull).communicate()
-    except OSError as e:
-        if proj_data['preprocess'].lower() == 'true':
-            print("Warning: gfortran not found; preprocessing turned off")
+    # Add gitter sidecar if specified in metadata
+    if 'gitter_sidecar' in proj_data:
+        proj_docs += '''
+        <script>
+            ((window.gitter = {{}}).chat = {{}}).options = {{
+            room: '{}'
+            }};
+        </script>
+        <script src="https://sidecar.gitter.im/dist/sidecar.v1.js" async defer></script>
+        '''.format(proj_data['gitter_sidecar'].strip())
+    # Handle preprocessor:
+    if proj_data['preprocess'].lower() == 'true':
+        if proj_data['preprocessor']:
+            preprocessor = proj_data['preprocessor'].split()
+        else:
+            preprocessor = ['cpp','-traditional-cpp','-E', '-D__GFORTRAN__']
+
+        # Check whether preprocessor works (reading nothing from stdin)
+        try:
+            devnull = open(os.devnull)
+            subprocess.Popen(preprocessor, stdin=devnull, stdout=devnull,
+                             stderr=devnull).communicate()
+        except OSError as ex:
+            print('Warning: Testing preprocessor failed')
+            print('  Preprocessor command: {}'.format(preprocessor))
+            print('  Exception: {}'.format(ex))
+            print('  -> Preprocessing turned off')
             proj_data['preprocess'] = 'false'
+        else:
+            proj_data['preprocess'] = 'true'
+            proj_data['preprocessor'] = preprocessor
+    
     # Get correct license
     try:
         proj_data['license'] = LICENSES[proj_data['license'].lower()]
@@ -256,6 +311,8 @@ def initialize():
         print('Warning: license "{}" not recognized.'.format(proj_data['license']))
         proj_data['license'] = ''
     # Return project data, docs, and the Markdown reader
+    md.reset()
+    md.Meta = {}
     return (proj_data, proj_docs, md)
 
 
@@ -296,12 +353,19 @@ def main(proj_data,proj_docs,md):
     else:
         page_tree = None
     proj_data['pages'] = page_tree
+
     # Produce the documentation using Jinja2. Output it to the desired location
     # and copy any files that are needed (CSS, JS, images, fonts, source files,
     # etc.)
-    print("Creating HTML documentation...")
+
     docs = ford.output.Documentation(proj_data,proj_docs_,project,page_tree)
     docs.writeout()
+
+    if proj_data['externalize'].lower() == 'true':
+        # save FortranModules to a JSON file which then can be used
+        # for external modules
+        ford.utils.external(project, make=True, path=proj_data['output_dir'])
+
     print('')
     return 0
 

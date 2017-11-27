@@ -9,19 +9,38 @@
 	 <span class="label label-danger depwarn">Deprecated</span>
     {% endif %}
     </h1>
-	 {{ macros.info_bar(src.name,src.meta,project_url,src.hierarchy) }}    
+    {{ macros.info_bar(src.name,src.meta,project_url,src.hierarchy,src.lines_description(project.file_lines)) }}
   </div>
   <div class="row">
-    <div class="col-lg-3">
+    <div class="col-md-3 hidden-xs hidden-sm visible-md visible-lg">
     {{ macros.sidebar(project,src) }}
     </div>
-    <div class="col-lg-9" id='text'>
+    <div class="col-md-9" id='text'>
     {{ src.doc }}
-    {% if src.doc %}<br>{% endif %}
+    {% if src.efferentgraph %}
+    <h2>This File Depends On</h2>
+    {{ src.efferentgraph }}
+    {% endif %}
+      {% if src.afferentgraph %}
+      <h2>Files Dependent On This One</h2>
+      {{ src.afferentgraph }}
+      {% endif %}
+      {% if src.doc or src.efferentgraph or src.afferentgraph%}<br>{% endif %}
+
+    <section class="visible-xs visible-sm hidden-md">
+      {{ macros.content_list(src,1) }}
+    </section>
+    <br class="visible-xs visible-sm hidden-md">
+
     <section>
-    <h2><span class="anchor" id="src"></span>Source Code</h2>
+      <h2><span class="anchor" id="src"></span>Source Code</h2>
     {{ src.src }}
     </section>
     </div>
   </div>
-{% endblock body %}
+
+  <section class="visible-xs visible-sm hidden-md">
+    <hr>
+    {{ macros.obj_list(project, src, 1) }}
+  </section>
+  {% endblock body %}

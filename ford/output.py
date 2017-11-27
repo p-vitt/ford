@@ -43,6 +43,7 @@ from ford.graphs import graphviz_installed
 
 loc = os.path.dirname(__file__)
 env = jinja2.Environment(loader=jinja2.FileSystemLoader(os.path.join(loc, "templates")))
+env.globals['path'] = os.path # this lets us call path.* in templates
 
 class Documentation(object):
     """
@@ -55,34 +56,55 @@ class Documentation(object):
         self.pagetree = []
         self.lists = []
         self.docs = []
-        if data['relative']:
-            ford.sourceform.set_base_url('.')
-            ford.pagetree.set_base_url('.')
-            data['project_url'] = '.'
+        self.njobs = int(self.data['parallel'])
+        self.parallel = self.njobs>0
+
         self.index = IndexPage(data,project,proj_docs)
         self.search = SearchPage(data,project)
-        if data['relative']:
-            ford.sourceform.set_base_url('..')
-            ford.pagetree.set_base_url('..')
-            data['project_url'] = '..'
-        if graphviz_installed:
-            self.graphs = GraphManager(data['project_url'],self.data['output_dir'],'graphs')
+        if not graphviz_installed and data['graph'].lower() == 'true':
+            print("Warning: Will not be able to generate graphs. Graphviz not installed.")
+        if self.data['relative']:
+            graphparent = '../'
+        else:
+            graphparent = ''
+        if graphviz_installed and data['graph'].lower() == 'true':
+            print('Generating graphs...')
+            self.graphs = GraphManager(self.data['project_url'],
+                                       self.data['output_dir'],
+                                       self.data.get('graph_dir',''),
+                                       graphparent,
+                                       self.data['coloured_edges'].lower() == 'true')
             for item in project.types:
                 self.graphs.register(item)
-            for item in project.procedures + project.submodprocedures:
+            for item in project.procedures:
                 self.graphs.register(item)
-            for item in project.modules + project.submodules:
+            for item in project.submodprocedures:
+                self.graphs.register(item)
+            for item in project.modules:
+                self.graphs.register(item)
+            for item in project.submodules:
                 self.graphs.register(item)
             for item in project.programs:
+                self.graphs.register(item)
+            for item in project.files:
+                self.graphs.register(item)
+            for item in project.blockdata:
                 self.graphs.register(item)
             self.graphs.graph_all()
             project.callgraph = self.graphs.callgraph
             project.typegraph = self.graphs.typegraph
             project.usegraph = self.graphs.usegraph
+            project.filegraph = self.graphs.filegraph
         else:
+            self.graphs = GraphManager(self.data['project_url'],
+                                       self.data['output_dir'],
+                                       self.data.get('graph_dir',''),
+                                       graphparent,
+                                       self.data['coloured_edges'].lower() == 'true')
             project.callgraph = ''
             project.typegraph = ''
             project.usegraph = ''
+            project.filegraph = ''
         try:
             for item in project.allfiles:
                 self.docs.append(FilePage(data,project,item))
@@ -90,17 +112,23 @@ class Documentation(object):
                 self.docs.append(TypePage(data,project,item))
             for item in project.absinterfaces:
                 self.docs.append(AbsIntPage(data,project,item))
-            for item in project.procedures + project.submodprocedures:
+            for item in project.procedures:
                 self.docs.append(ProcPage(data,project,item))
-            for item in project.modules + project.submodules:
+            for item in project.submodprocedures:
+                self.docs.append(ProcPage(data,project,item))
+            for item in project.modules:
+                self.docs.append(ModulePage(data,project,item))
+            for item in project.submodules:
                 self.docs.append(ModulePage(data,project,item))
             for item in project.programs:
                 self.docs.append(ProgPage(data,project,item))
+            for item in project.blockdata:
+                self.docs.append(BlockPage(data,project,item))
             if len(project.procedures) > 0:
                 self.lists.append(ProcList(data,project))
-            if len(project.allfiles) > 1:
+            if len(project.files) + len(project.extra_files) > 1:
                 self.lists.append(FileList(data,project))
-            if len(project.modules + project.submodules) > 0:
+            if len(project.modules) + len(project.submodules) > 0:
                 self.lists.append(ModList(data,project))
             if len(project.programs) > 1:
                 self.lists.append(ProgList(data,project))
@@ -108,6 +136,8 @@ class Documentation(object):
                 self.lists.append(TypeList(data,project))
             if len(project.absinterfaces) > 0:
                 self.lists.append(AbsIntList(data,project))
+            if len(project.blockdata) > 1:
+                self.lists.append(BlockList(data,project))
             if pagetree:
                 for item in pagetree:
                     self.pagetree.append(PagetreePage(data,project,item))
@@ -118,17 +148,28 @@ class Documentation(object):
             else:
                 sys.exit('Error encountered. Run with "--debug" flag for traceback.')
         if data['search'].lower() == 'true':
+            print('Creating search index...')
             if data['relative']:
                 self.tipue = ford.tipue_search.Tipue_Search_JSON_Generator(data['output_dir'],'')
             else:
                 self.tipue = ford.tipue_search.Tipue_Search_JSON_Generator(data['output_dir'],data['project_url'])
-            self.tipue.create_node(self.index.html,'index.html', {'categroy': 'home'})
-            for p in self.docs:
+            self.tipue.create_node(self.index.html,'index.html', {'category': 'home'})
+            ndocs = len(self.docs)
+            percent = (ndocs+len(self.pagetree))//100
+            for i,p in enumerate(self.docs):
                 self.tipue.create_node(p.html,p.loc,p.obj.meta)
-            for p in self.pagetree:
+                if (i % percent == 0):
+                    sys.stdout.write('.')
+                    sys.stdout.flush()
+            for i,p in enumerate(self.pagetree):
                 self.tipue.create_node(p.html,p.loc)
+                if ((i+ndocs) % percent == 0):
+                    sys.stdout.write('.')
+                    sys.stdout.flush()
+            print('')
             
     def writeout(self):
+        print("Writing HTML documentation...")
         out_dir = self.data['output_dir']
         try:
             if os.path.isfile(out_dir):
@@ -146,10 +187,11 @@ class Documentation(object):
         os.mkdir(os.path.join(out_dir,'module'), 0o755)
         os.mkdir(os.path.join(out_dir,'program'), 0o755)
         os.mkdir(os.path.join(out_dir,'src'), 0o755)
+        os.mkdir(os.path.join(out_dir,'blockdata'), 0o755)
         copytree(os.path.join(loc,'css'), os.path.join(out_dir,'css'))
         copytree(os.path.join(loc,'fonts'), os.path.join(out_dir,'fonts'))
         copytree(os.path.join(loc,'js'), os.path.join(out_dir,'js'))
-        #~ self.graphs.output_graphs()
+        if self.data['graph'].lower() == 'true': self.graphs.output_graphs(self.njobs)
         if self.data['search'].lower() == 'true':
             copytree(os.path.join(loc,'tipuesearch'),os.path.join(out_dir,'tipuesearch'))
             self.tipue.print_output()
@@ -166,8 +208,19 @@ class Documentation(object):
             shutil.copy(self.data['favicon'],os.path.join(out_dir,'favicon.png'))
         for src in self.project.allfiles:
             shutil.copy(src.path,os.path.join(out_dir,'src',src.name))
-        for p in self.docs + self.lists + self.pagetree + [self.index, self.search]:
+        if 'mathjax_config' in self.data:
+            shutil.copy(self.data['mathjax_config'],
+                        os.path.join(out_dir, os.path.join('js/MathJax-config',
+                              os.path.basename(self.data['mathjax_config']))))
+        # By doing this we omit a duplication of data.
+        for p in self.docs:
             p.writeout()
+        for p in self.lists:
+            p.writeout()
+        for p in self.pagetree:
+            p.writeout()
+        self.index.writeout()
+        self.search.writeout()
 
 
 class BasePage(object):
@@ -175,30 +228,40 @@ class BasePage(object):
     Abstract class for representation of pages in the documentation.
     
       data
-        Dictionary containing project_directory
+        Dictionary containing project information (to be used when rendering)
       proj
         FortranProject object
       obj
         The object/item in the code which this page is documenting
-    """    
-    def __init__(self,data,proj,obj=None):
-        self.html = self.render(data,proj,obj)
-        self.out_dir = data['output_dir']
-        self.obj = obj
+    """
+    def __init__(self, data, proj, obj=None):
         self.data = data
+        self.proj = proj
+        self.obj = obj
+
+    @property
+    def out_dir(self):
+        """ Returns the output directory of the project """
+        return self.data['output_dir']
+
+    @property
+    def html(self):
+        """ Wrapper for only doing the rendering on request (drastically reduces memory) """
+        return self.render(self.data, self.proj, self.obj)
     
     def writeout(self):
         out = open(self.outfile,'wb')
         out.write(self.html.encode('utf8'))
         out.close()
     
-    def render(self,data,proj,obj):
+    def render(self, data, proj, obj):
         """
         Get the HTML for the page. This method must be overridden. Arguments
         are proj_data, project object, and item in the code which the
         page documents.
         """
-        raise Exception("Should not instantiate BasePage type")
+        raise NotImplementedError("Should not instantiate BasePage type")
+
 
 
 class IndexPage(BasePage):
@@ -207,6 +270,10 @@ class IndexPage(BasePage):
         return os.path.join(self.out_dir,'index.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '.'
+            ford.sourceform.set_base_url('.')
+            ford.pagetree.set_base_url('.')
         template = env.get_template('index.html')
         return template.render(data,project=proj,proj_docs=obj)
 
@@ -217,6 +284,10 @@ class SearchPage(BasePage):
         return os.path.join(self.out_dir,'search.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '.'
+            ford.sourceform.set_base_url('.')
+            ford.pagetree.set_base_url('.')
         template = env.get_template('search.html')
         return template.render(data,project=proj)
 
@@ -227,6 +298,10 @@ class ProcList(BasePage):
         return os.path.join(self.out_dir,'lists','procedures.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('proc_list.html')
         return template.render(data,project=proj)
 
@@ -237,6 +312,10 @@ class FileList(BasePage):
         return os.path.join(self.out_dir,'lists','files.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('file_list.html')
         return template.render(data,project=proj)
 
@@ -247,6 +326,10 @@ class ModList(BasePage):
         return os.path.join(self.out_dir,'lists','modules.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('mod_list.html')
         return template.render(data,project=proj)
 
@@ -257,6 +340,10 @@ class ProgList(BasePage):
         return os.path.join(self.out_dir,'lists','programs.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('prog_list.html')
         return template.render(data,project=proj)
 
@@ -267,6 +354,10 @@ class TypeList(BasePage):
         return os.path.join(self.out_dir,'lists','types.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('types_list.html')
         return template.render(data,project=proj)
 
@@ -277,7 +368,25 @@ class AbsIntList(BasePage):
         return os.path.join(self.out_dir,'lists','absint.html')
 
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('absint_list.html')
+        return template.render(data,project=proj)
+
+
+class BlockList(BasePage):
+    @property
+    def outfile(self):
+        return os.path.join(self.out_dir,'lists','blockdata.html')
+
+    def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
+        template = env.get_template('block_list.html')
         return template.render(data,project=proj)
 
 
@@ -296,24 +405,40 @@ class DocPage(BasePage):
 
 class FilePage(DocPage):
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('file_page.html')
         return template.render(data,src=obj,project=proj)
 
 
 class TypePage(DocPage):
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('type_page.html')
         return template.render(data,dtype=obj,project=proj)
 
 
 class AbsIntPage(DocPage):
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('nongenint_page.html')
         return template.render(data,interface=obj,project=proj)
 
 
 class ProcPage(DocPage):
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         if obj.obj == 'proc':
             template = env.get_template('proc_page.html')
             return template.render(data,procedure=obj,project=proj)
@@ -327,14 +452,31 @@ class ProcPage(DocPage):
 
 class ModulePage(DocPage):
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('mod_page.html')
         return template.render(data,module=obj,project=proj)
 
 
 class ProgPage(DocPage):
     def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
         template = env.get_template('prog_page.html')
         return template.render(data,program=obj,project=proj)
+
+class BlockPage(DocPage):
+    def render(self,data,proj,obj):
+        if data['relative']:
+            data['project_url'] = '..'
+            ford.sourceform.set_base_url('..')
+            ford.pagetree.set_base_url('..')
+        template = env.get_template('block_page.html')
+        return template.render(data,blockdat=obj,project=proj)
 
 
 class PagetreePage(BasePage):
@@ -374,16 +516,14 @@ class PagetreePage(BasePage):
                   os.path.join(self.data['page_dir'],self.obj.location,item),e.args[0]))
 
 
-def copytree(src, dst, symlinks=False, ignore=None):
+def copytree(src, dst):
+    """Replaces shutil.copytree to avoid problems on certain file systems.
+
+    shutil.copytree() and shutil.copystat() invoke os.setxattr(), which seems
+    to fail when called for directories on at least one NFS file system.
+    The current routine is a simple replacement, which should be good enough for
+    Ford.
     """
-    A version of shutil.copystat() modified so that it won't copy over
-    date metadata.
-    """
-    try:
-        WindowsError
-    except NameError:
-        WindowsError = None
-    
     def touch(path):
         now = time.time()
         try:
@@ -396,42 +536,15 @@ def copytree(src, dst, symlinks=False, ignore=None):
             open(path, "w").close()
             os.utime(path, (now, now))
 
-    names = os.listdir(src)
-    if ignore is not None:
-        ignored_names = ignore(src, names)
-    else:
-        ignored_names = set()
-
-    os.makedirs(dst)
-    errors = []
-    for name in names:
-        if name in ignored_names:
-            continue
-        srcname = os.path.join(src, name)
-        dstname = os.path.join(dst, name)
-        try:
-            if symlinks and os.path.islink(srcname):
-                linkto = os.readlink(srcname)
-                os.symlink(linkto, dstname)
-            elif os.path.isdir(srcname):
-                copytree(srcname, dstname, symlinks, ignore)
-            else:
-                shutil.copy2(srcname, dstname)
-                touch(dstname)                
-            # XXX What about devices, sockets etc.?
-        except (IOError, os.error) as why:
-            errors.append((srcname, dstname, str(why)))
-        # catch the Error from the recursive copytree so that we can
-        # continue with other files
-        except Error as err:
-            errors.extend(err.args[0])
-    try:
-        shutil.copystat(src, dst)
-    except WindowsError:
-        # can't copy file access times on Windows
-        pass
-    except OSError as why:
-        errors.extend((src, dst, str(why)))
-    touch(dst)
-    if errors:
-        raise Error(errors)
+    for root, dirs, files in os.walk(src):
+        relsrcdir = os.path.relpath(root, src)
+        dstdir = os.path.join(dst, relsrcdir)
+        if not os.path.exists(dstdir):
+            try:
+                os.makedirs(dstdir)
+            except OSError as ex:
+                if ex.errno != errno.EEXIST:
+                    raise
+        for ff in files:
+            shutil.copy(os.path.join(root, ff), os.path.join(dstdir, ff))
+            touch(os.path.join(dstdir, ff))

@@ -9,16 +9,16 @@
 	 <span class="label label-danger depwarn">Deprecated</span>
     {% endif %}
     </h1>
-	 {{ macros.info_bar(dtype.name,dtype.meta,project_url,dtype.hierarchy) }}    
+    {{ macros.info_bar(dtype.name,dtype.meta,project_url,dtype.hierarchy,dtype.lines_description(project.type_lines,project.type_lines_all)) }}
   </div>
   
   <div class="row">
-    <div class="col-lg-3">
+    <div class="col-md-3 hidden-xs hidden-sm visible-md visible-lg">
     {{ macros.sidebar(project,dtype) }}
     </div>
     
-    <div class="col-lg-9" id='text'>
-    <h2>type{% if dtype.parobj == 'module' %}, {{ dtype.permission }}{% endif %}{% for attr in dtype.attributes%}, {{ attr }}{% endfor %}{% if dtype.extends %}, extends({{ dtype.extends }}){% endif %} :: {{ dtype.name }}{% if dtype.sequence%}<br>sequence{% endif %}</h2>
+    <div class="col-md-9" id='text'>
+      <h2>type{% if dtype.parobj == 'module' %}, {{ dtype.permission }}{% endif %}{% for attr in dtype.attributes%}, {{ attr }}{% endfor %}{% if dtype.extends %}, extends({{ dtype.extends }}){% endif %} :: {{ dtype.name }}{% if dtype.sequence%}<br>sequence{% endif %}</h2>
     {% if dtype.inhergraph %}
     {{ dtype.inhergraph }}
     <br><br>
@@ -29,9 +29,15 @@
     <h3>Inherited By</h3>
     {{ dtype.inherbygraph }}
     {% endif %}
+
+    <section class="visible-xs visible-sm hidden-md">
+      {{ macros.content_list(dtype,1) }}
+    </section>
+    <br class="visible-xs visible-sm hidden-md">
+
     {% if dtype.variables|length > 0 %}
     <section>
-    <h2>Components</h2>
+    <h3>Components</h3>
     {{ macros.var_list(dtype.variables,permission=True) }}
     </section>
     <br>
@@ -39,7 +45,7 @@
     
     {% if dtype.constructor %}
 	 <section>
-	 <h2>Constructor</h2>
+	 <h3>Constructor</h3>
 	   {% if dtype.constructor.obj == "interface" %}
 	   {{ macros.interface(dtype.constructor) }}
 	   {% elif dtype.constructor.obj == "subroutine" or dtype.constructor.obj == "function" %}
@@ -57,7 +63,7 @@
     
     {% if dtype.finalprocs|length > 0 %}
     <section>
-    <h2>Finalization Procedures</h2>
+    <h3>Finalization Procedures</h3>
 	   {% for proc in dtype.finalprocs %}
          {{ macros.final(proc) }}
        {% endfor %}  
@@ -67,7 +73,7 @@
     
     {% if dtype.boundprocs|length > 0 %} 
     <section>
-    <h2>Type-Bound Procedures</h2>
+    <h3>Type-Bound Procedures</h3>
     {% for bp in dtype.boundprocs %}
 	   {{ macros.bound_info(bp) }}
     {% endfor %}
@@ -76,11 +82,16 @@
     
     {% if dtype.src %}
     <section>
-    <h2><span class="anchor" id="src"></span>Source Code</h2>
+    <h3><span class="anchor" id="src"></span>Source Code</h3>
     {{ dtype.src }}
     </section>
     {% endif %}
     
     </div>
   </div>
+
+  <section class="visible-xs visible-sm hidden-md">
+    <hr>
+    {{ macros.obj_list(project, dtype, 1) }}
+  </section>
 {% endblock body %}

@@ -35,6 +35,8 @@ else:
     from StringIO import StringIO
 import os.path
 
+from ford.fixed2free2 import convertToFree
+
 class FortranReader(object):
     """
     An iterator which will convert a free-form Fortran source file into
@@ -56,7 +58,8 @@ class FortranReader(object):
     SC_RE = re.compile("^([^;]*);(.*)$")
 
     def __init__(self,filename,docmark='!',predocmark='',docmark_alt='',
-                 predocmark_alt='',preprocess=False,macros=[],inc_dirs=[]):
+                 predocmark_alt='',fixed=False,preprocessor=None,macros=[],
+                 inc_dirs=[]):
         self.name = filename
         
         # Check that none of the docmarks are the same
@@ -73,11 +76,15 @@ class FortranReader(object):
         if predocmark == predocmark_alt != '':
             raise Exception('Error: predocmark and predocmark_alt are the same.')
         
-        if preprocess:
+        if preprocessor:
             macros = ['-D' + mac.strip() for mac in macros]
             incdirs = ['-I' + d.strip() for d in inc_dirs]
-            fpp = subprocess.Popen(["gfortran", "-E", "-cpp", filename]+macros+incdirs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            preprocessor = preprocessor + macros + incdirs + [filename]
+            fpp = subprocess.Popen(preprocessor, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, 
+                                   universal_newlines=True)
             (out, err) = fpp.communicate()
+
             if len(err) > 0:
                 print('Warning: error preprocessing '+filename)
                 print(err)
@@ -87,6 +94,10 @@ class FortranReader(object):
         else:
             self.reader = open(filename,'r')
         
+        if fixed:
+            self.reader = convertToFree(self.reader)
+        
+        self.fixed = fixed
         self.inc_dirs = inc_dirs
         self.docbuffer = []
         self.pending = []
@@ -147,7 +158,6 @@ class FortranReader(object):
                 line = self.reader.__next__()
             else:   #Python 2
                 line = self.reader.next()
-
             if len(line.strip()) > 0 and line.strip()[0] == '#': continue
 
             # Capture any preceding documenation comments
@@ -287,7 +297,7 @@ class FortranReader(object):
             return
         name = self.pending.pop(0)[8:].strip()[1:-1]
         for b in [os.path.dirname(self.name)] + self.inc_dirs:
-            pname = os.path.join(b, name)
+            pname = os.path.abspath(os.path.expanduser(os.path.join(b, name)))
             if os.path.isfile(pname):
                 name = pname
                 break
@@ -295,7 +305,7 @@ class FortranReader(object):
             raise Exception('Can not find include file "{}".'.format(name))
         self.pending = list(FortranReader(name, self.docmark, self.predocmark, 
                                           self.docmark_alt, self.predocmark_alt,
-                                          inc_dirs=self.inc_dirs)) \
+                                          self.fixed, inc_dirs=self.inc_dirs)) \
                        + self.pending
 
 

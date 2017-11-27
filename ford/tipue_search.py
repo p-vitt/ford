@@ -7,17 +7,17 @@
 #  Copyright 2015 Christopher MacMackin <cmacmackin@gmail.com>
 #  
 #  This program is free software; you can redistribute it and/or modify
-#  it under the terms of the GNU General Public License as published by
-#  the Free Software Foundation; either version 3 of the License, or
-#  (at your option) any later version.
+#  it under the terms of the GNU Affero General Public License as 
+#  published by the Free Software Foundation; either version 3 of the 
+#  License, or (at your option) any later version.
 #  
 #  This program is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License for more details.
+#  GNU Affero General Public License for more details.
 #  
-#  You should have received a copy of the GNU General Public License
-#  along with this program; if not, write to the Free Software
+#  You should have received a copy of the GNU Affero General Public
+#  License along with this program; if not, write to the Free Software
 #  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 #  MA 02110-1301, USA.
 #  
@@ -38,7 +38,7 @@ from __future__ import unicode_literals
 
 import os.path
 import json
-from bs4 import BeautifulSoup, FeatureNotFound
+from bs4 import BeautifulSoup, FeatureNotFound, SoupStrainer
 from codecs import open
 try:
     from urlparse import urljoin
@@ -54,19 +54,23 @@ class Tipue_Search_JSON_Generator(object):
         self.output_path = output_path
         self.siteurl = project_url
         self.json_nodes = []
+        self.only_text = SoupStrainer('div', id="text")
+        self.only_title = SoupStrainer('title')
 
 
     def create_node(self, html, loc, meta={}):
         try:
-            soup = BeautifulSoup(html,'lxml')
+            soup = BeautifulSoup(html,'lxml', parse_only=self.only_text)
+            soup_title = BeautifulSoup(html,'lxml', parse_only=self.only_title)
         except FeatureNotFound:
-            soup = BeautifulSoup(html,'html.parser')
-            
+            soup = BeautifulSoup(html,'html.parser', parse_only=self.only_text)
+            soup_title = BeautifulSoup(html,'html.parser', parse_only=self.only_title)
+
         page_text = soup.find("div", {"id": "text"}).get_text(' ', strip=True).replace('\\(','').replace('\\)','').replace('\\[','').replace('\\]','').replace('$$','').replace('^','&#94;')
 
         # What happens if there is not a title.
-        if soup.title is not None:
-            page_title = soup.title.string
+        if soup_title.title is not None:
+            page_title = '{0}'.format(soup_title.title.string)
         else:
             page_title = ''
 

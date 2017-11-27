@@ -25,9 +25,19 @@
 
 from __future__ import print_function
 import os
+import time
+from multiprocessing import Pool
 
-from ford.sourceform import FortranFunction, FortranSubroutine, FortranInterface, FortranProgram, FortranType, FortranModule, FortranSubmodule, FortranSubmoduleProcedure
+from ford.sourceform import FortranFunction, FortranSubroutine, FortranInterface, FortranProgram, FortranType, FortranModule, FortranSubmodule, FortranSubmoduleProcedure, FortranSourceFile, FortranBlockData
 import ford.graphs
+
+#Wrapper function for output graphs -- needed to allow multiprocessing to
+#pickle the function (must be at top level)
+def outputFuncWrap(args):
+    for f in args[0:-1]:
+        f.create_svg(args[-1])
+
+    return None
 
 class GraphManager(object):
     """
@@ -45,18 +55,22 @@ class GraphManager(object):
         The location of the graphs within the output tree.
     """
     
-    def __init__(self,base_url,outdir,graphdir):
+    def __init__(self,base_url,outdir,graphdir,parentdir,coloured_edges):
         self.graph_objs = []
         self.modules = set()
         self.programs = set()
         self.procedures = set()
         self.types = set()
+        self.sourcefiles = set()
+        self.blockdata = set()
         self.graphdir = graphdir
-        self.outdir = os.path.join(outdir,graphdir)
         self.webdir = base_url + '/' + graphdir
         self.usegraph = None
         self.typegraph = None
         self.callgraph = None
+        self.filegraph = None
+        ford.graphs.set_coloured_edges(coloured_edges)
+        ford.graphs.set_graphs_parentdir(parentdir)
 
     def register(self,obj):
         if obj.meta['graph'] == 'true':
@@ -76,38 +90,94 @@ class GraphManager(object):
             elif isinstance(obj,(FortranFunction,FortranSubroutine,FortranInterface,FortranSubmoduleProcedure)):
                 obj.callsgraph = ford.graphs.CallsGraph(obj,self.webdir)
                 obj.calledbygraph = ford.graphs.CalledByGraph(obj,self.webdir)
+                obj.usesgraph = ford.graphs.UsesGraph(obj,self.webdir)
                 self.procedures.add(obj)
             elif isinstance(obj,FortranProgram):
                 obj.usesgraph = ford.graphs.UsesGraph(obj,self.webdir)
                 obj.callsgraph = ford.graphs.CallsGraph(obj,self.webdir)
                 self.programs.add(obj)
+            elif isinstance(obj,FortranSourceFile):
+                obj.afferentgraph = ford.graphs.AfferentGraph(obj,self.webdir)
+                obj.efferentgraph = ford.graphs.EfferentGraph(obj,self.webdir)
+                self.sourcefiles.add(obj)
+            elif isinstance(obj,FortranBlockData):
+                obj.usesgraph = ford.graphs.UsesGraph(obj,self.webdir)
+                self.blockdata.add(obj)
         usenodes = list(self.modules)
         callnodes = list(self.procedures)
         for p in self.programs:
-            if p.usesgraph.numnodes > 1: usenodes.append(p)
-            if p.callsgraph.numnodes > 1: callnodes.append(p)
+            if len(p.usesgraph.added) > 1: usenodes.append(p)
+            if len(p.callsgraph.added) > 1: callnodes.append(p)
+        for p in self.procedures:
+            if len(p.usesgraph.added) > 1: usenodes.append(p)
+        for b in self.blockdata:
+            if len(b.usesgraph.added) > 1: usenodes.append(b)
         self.usegraph = ford.graphs.ModuleGraph(usenodes,self.webdir,'module~~graph')
         self.typegraph = ford.graphs.TypeGraph(self.types,self.webdir,'type~~graph')
         self.callgraph = ford.graphs.CallGraph(callnodes,self.webdir,'call~~graph')
+        self.filegraph = ford.graphs.FileGraph(self.sourcefiles,self.webdir,'file~~graph')
 
-    def output_graphs(self):
-        os.mkdir(self.outdir, 0o755)
-        for m in self.modules:
-            m.usesgraph.create_svg(self.outdir)
-            m.usedbygraph.create_svg(self.outdir)
-        for t in self.types:
-            t.inhergraph.create_svg(self.outdir)
-            t.inherbygraph.create_svg(self.outdir)
-        for p in self.procedures:
-            p.callsgraph.create_svg(self.outdir)
-            p.calledbygraph.create_svg(self.outdir)
-        for p in self.programs:
-            p.callsgraph.create_svg(self.outdir)
-            p.usesgraph.create_svg(self.outdir)
+    def output_graphs(self,njobs=0):
+        if not self.graphdir: return
+        try:
+            os.mkdir(self.graphdir, 0o755)
+        except OSError:
+            pass
+        if njobs==0:
+            for m in self.modules:
+                m.usesgraph.create_svg(self.graphdir)
+                m.usedbygraph.create_svg(self.graphdir)
+            for t in self.types:
+                t.inhergraph.create_svg(self.graphdir)
+                t.inherbygraph.create_svg(self.graphdir)
+            for p in self.procedures:
+                p.callsgraph.create_svg(self.graphdir)
+                p.calledbygraph.create_svg(self.graphdir)
+            for p in self.programs:
+                p.callsgraph.create_svg(self.graphdir)
+                p.usesgraph.create_svg(self.graphdir)
+            for f in self.sourcefiles:
+                f.afferentgraph.create_svg(self.graphdir)
+                f.efferentgraph.create_svg(self.graphdir)
+            for b in self.blockdata:
+                b.usesgraph.create_svg(self.graphdir)
+        else:
+            args = []
+            # args.extend([(m.usesgraph, self.graphdir) for m in self.modules])
+            # args.extend([(m.usedbygraph, self.graphdir) for m in self.modules])
+            # args.extend([(m.inhergraph, self.graphdir) for m in self.types])
+            # args.extend([(m.inherbygraph, self.graphdir) for m in self.types])
+            # args.extend([(m.callsgraph, self.graphdir) for m in self.procedures])
+            # args.extend([(m.calledbygraph, self.graphdir) for m in self.procedures])
+            # args.extend([(m.callsgraph, self.graphdir) for m in self.programs])
+            # args.extend([(m.usesgraph, self.graphdir) for m in self.programs])
+            # args.extend([(m.afferentgraph, self.graphdir) for m in self.sourcefiles])
+            # args.extend([(m.efferentgraph, self.graphdir) for m in self.sourcefiles])
+            # args.extend([(m.usesgraph, self.graphdir) for m in self.blockdata])
+
+            #Note we generate all graphs for a given object in one wrapper call
+            #this is to try to ensure we don't get name collisions not present 
+            #in the serial version (e.g. due to calling usesgraph and usedbygraph on
+            #a particular module in two different processes). May not actually be needed
+            #commented block above allows testing of one graph per call approach.
+            args.extend([(m.usesgraph, m.usedbygraph,self.graphdir) for m in self.modules])
+            args.extend([(m.inhergraph, m.inherbygraph, self.graphdir) for m in self.types])
+            args.extend([(m.callsgraph, m.calledbygraph, self.graphdir) for m in self.procedures])
+            args.extend([(m.callsgraph, m.usesgraph, self.graphdir) for m in self.programs])
+            args.extend([(m.afferentgraph, m.efferentgraph, self.graphdir) for m in self.sourcefiles])
+            args.extend([(m.usesgraph,self.graphdir) for m in self.blockdata])
+
+            np = min(njobs,len(args))
+            pool = Pool(processes=np)
+            results = pool.map(outputFuncWrap,args,len(args)/np)
+            pool.close()
+            pool.join()
+
         if self.usegraph:
-            self.usegraph.create_svg(self.outdir)
+            self.usegraph.create_svg(self.graphdir)
         if self.typegraph:
-            self.typegraph.create_svg(self.outdir)
+            self.typegraph.create_svg(self.graphdir)
         if self.callgraph:
-            self.callgraph.create_svg(self.outdir)
-
+            self.callgraph.create_svg(self.graphdir)
+        if self.filegraph:
+            self.filegraph.create_svg(self.graphdir)

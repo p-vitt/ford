@@ -24,15 +24,27 @@
 #  
 
 
-
 import re
 import os.path
+import json
+import sys
+import ford.sourceform
+if (sys.version_info[0] > 2):
+    from urllib.request import urlopen
+    from urllib.parse import urljoin
+else:
+    from urllib import urlopen
+    from urlparse import urljoin
 
-NOTE_RE = re.compile("@note\s*(.*?)\s*</p>",re.IGNORECASE|re.DOTALL)
-WARNING_RE = re.compile("@warning\s*(.*?)\s*</p>",re.IGNORECASE|re.DOTALL)
-TODO_RE = re.compile("@todo\s*(.*?)\s*</p>",re.IGNORECASE|re.DOTALL)
-BUG_RE = re.compile("@bug\s*(.*?)\s*</p>",re.IGNORECASE|re.DOTALL)
-LINK_RE = re.compile("\[\[(\w+)(?:\((\w+)\))?(?::(\w+)(?:\((\w+)\))?)?\]\]")
+NOTE_TYPE = {'note':'info',
+             'warning':'warning',
+             'todo':'success',
+             'bug':'danger'}
+NOTE_RE = [re.compile(r"@({})\s*(((?!@({})).)*?)@end\1\s*(</p>)?".format(note,
+           '|'.join(NOTE_TYPE.keys())), re.IGNORECASE|re.DOTALL) for note in NOTE_TYPE] \
+        + [re.compile(r"@({})\s*(.*?)\s*</p>".format(note),
+                      re.IGNORECASE|re.DOTALL) for note in NOTE_TYPE]
+LINK_RE = re.compile(r"\[\[(\w+(?:\.\w+)?)(?:\((\w+)\))?(?::(\w+)(?:\((\w+)\))?)?\]\]")
 
 
 def sub_notes(docs):
@@ -40,18 +52,14 @@ def sub_notes(docs):
     Substitutes the special controls for notes, warnings, todos, and bugs with
     the corresponding div.
     """
-    while NOTE_RE.search(docs):
-        docs = NOTE_RE.sub("</p><div class=\"alert alert-info\" role=\"alert\"><h4>Note</h4>\g<1></div>",docs)
-        
-    while WARNING_RE.search(docs):
-        docs = WARNING_RE.sub("</p><div class=\"alert alert-warning\" role=\"alert\"><h4>Warning</h4>\g<1></div>",docs)
-    
-    while TODO_RE.search(docs):
-        docs = TODO_RE.sub("</p><div class=\"alert alert-success\" role=\"alert\"><h4>ToDo</h4>\g<1></div>",docs)
-    
-    while BUG_RE.search(docs):
-        docs = BUG_RE.sub("</p><div class=\"alert alert-danger\" role=\"alert\"><h4>Bug</h4>\g<1></div>",docs)
-
+    def substitute(match):
+        ret = "</p><div class=\"alert alert-{}\" role=\"alert\"><h4>{}</h4>" \
+              "<p>{}</p></div>".format(NOTE_TYPE[match.group(1).lower()],
+                                       match.group(1).capitalize(), match.group(2))
+        if len(match.groups()) >= 4 and not match.group(4): ret += '\n<p>'
+        return ret
+    for regex in NOTE_RE:
+        docs = regex.sub(substitute,docs)
     return docs
 
 
@@ -146,7 +154,10 @@ def split_path(path):
     a list.
     '''
     def recurse_path(path,retlist):
-        if len(retlist) > 10: exit(0)
+        if len(retlist) > 100:
+            fullpath = os.path.join(*([ path, ] + retlist))
+            print("Directory '{}' contains too many levels".format(fullpath))
+            exit(1)
         head, tail = os.path.split(path)
         if len(tail) > 0:
             retlist.insert(0,tail)
@@ -173,16 +184,25 @@ def sub_links(string,project):
     for either or both of these parts.
     '''
     LINK_TYPES    = { 'module': 'modules',
+                      'extmodule': 'extModules',
                       'type': 'types',
+                      'exttype': 'extTypes',
                       'procedure': 'procedures',
+                      'extprocedure': 'extProcedures',
                       'subroutine': 'procedures',
+                      'extsubroutine': 'extProcedures',
                       'function': 'procedures',
+                      'extfunction': 'extProcedures',
                       'proc': 'procedures',
+                      'extproc': 'extProcedures',
                       'file': 'allfiles',
                       'interface': 'absinterfaces',
+                      'extinterface': 'extInterfaces',
                       'absinterface': 'absinterfaces',
-                      'program': 'programs' }
-        
+                      'extabsinterface': 'extInterfaces',
+                      'program': 'programs',
+                      'block': 'blockdata'}
+
     SUBLINK_TYPES = { 'variable': 'variables',
                       'type': 'types',
                       'constructor': 'constructor',
@@ -192,9 +212,9 @@ def sub_links(string,project):
                       'function': 'functions',
                       'final': 'finalprocs',
                       'bound': 'boundprocs',
-                      'modproc': 'modprocs' }
-        
-    
+                      'modproc': 'modprocs',
+                      'common': 'common' }
+
     def convert_link(match):
         ERR = 'Warning: Could not substitute link {}. {}'
         url = ''
@@ -202,7 +222,6 @@ def sub_links(string,project):
         found = False
         searchlist = []
         item = None
-        
         #[name,obj,subname,subobj]
         if not match.group(2):
             for key, val in LINK_TYPES.items():
@@ -223,7 +242,6 @@ def sub_links(string,project):
                 break
         else:
             print(ERR.format(match.group(),'"{}" not found.'.format(match.group(1))))
-        
         if found and match.group(3):
             searchlist = []
             if not match.group(4):
@@ -281,3 +299,114 @@ def sub_macros(string,base_url):
     for key, val in macros.items():
         string = string.replace(key,val)
     return string
+
+
+def external(project, make=False, path='.'):
+    '''
+    Reads and writes the information needed for processing external modules.
+    '''
+
+    # attributes of a module object needed for further processing
+    attribs = ['pub_procs', 'pub_absints', 'pub_types', 'pub_vars',
+               'functions', 'subroutines', 'interfaces', 'absinterfaces',
+               'types', 'variables']
+
+    def obj2dict(intObj):
+        '''
+        Converts an object to a dictionary.
+        '''
+        extDict = {}
+        extDict['name'] = intObj.name
+        extDict['extURL'] = intObj.get_url()
+        extDict['obj'] = intObj.obj
+        if hasattr(intObj, 'proctype'):
+            extDict['proctype'] = intObj.proctype
+        if hasattr(intObj, 'extends'):
+            extDict['extends'] = intObj.extends
+        for attrib in attribs:
+            if hasattr(intObj, attrib):
+                if type(getattr(intObj, attrib)) == str:
+                    extDict[attrib] = getattr(intObj, attrib)
+                elif type(getattr(intObj, attrib)) == list:
+                    extDict[attrib] = []
+                    for item in getattr(intObj, attrib):
+                        extItem = obj2dict(item)
+                        extDict[attrib].append(extItem)
+                elif type(getattr(intObj, attrib)) == dict:
+                    extDict[attrib] = {}
+                    for key, val in getattr(intObj, attrib).items():
+                        extItem = obj2dict(val)
+                        extDict[attrib][key] = extItem
+        return extDict
+
+    def dict2obj(extDict, url, parent=None):
+        '''
+        Converts a dictionary to an object.
+        '''
+        if extDict['obj'].lower() == 'module':
+            extObj = ford.sourceform.ExtModule()
+            project.extModules.append(extObj)
+        elif extDict['obj'].lower() == 'proc':
+            if extDict['proctype'].lower() == 'function':
+                extObj = ford.sourceform.ExtFunction()
+            elif extDict['proctype'].lower() == 'subroutine':
+                extObj = ford.sourceform.ExtSubroutine()
+            elif extDict['proctype'].lower() == 'interface':
+                extObj = ford.sourceform.ExtInterface()
+            project.extProcedures.append(extObj)
+            extObj.proctype = extDict['proctype']
+        elif extDict['obj'].lower() == 'interface':
+            extObj = ford.sourceform.ExtInterface()
+            project.extInterfaces.append(extObj)
+            extObj.proctype = extDict['proctype']
+        elif extDict['obj'].lower() == 'type':
+            extObj = ford.sourceform.ExtType()
+            project.extTypes.append(extObj)
+            extObj.extends = extDict['extends']
+        elif extDict['obj'].lower() == 'variable':
+            extObj = ford.sourceform.ExtVariable()
+            project.extVariables.append(extObj)
+        extObj.name = extDict['name']
+        if extDict['extURL']:
+            extDict['extURL'] = '/' + extDict['extURL'].split('/', 1)[-1]
+            extObj.extURL = url + extDict['extURL']
+        else:
+            extObj.extURL = extDict['extURL']
+        extObj.obj = extDict['obj']
+        extObj.parent = parent
+        for key in attribs:
+            if key in extDict:
+                if type(extDict[key]) == str:
+                    setattr(extObj, key, extDict[key])
+                elif type(extDict[key]) == list:
+                    tmpLs = []
+                    for item in extDict[key]:
+                        tmpLs.append(dict2obj(item, url, extObj))
+                    setattr(extObj, key, tmpLs)
+                elif type(extDict[key]) == dict:
+                    tmpDict = {}
+                    for key2, val in extDict[key].items():
+                        tmpDict[key2] = dict2obj(val, url, extObj)
+                    setattr(extObj, key, tmpDict)
+        return extObj
+
+    if make:
+        # convert internal module object to a JSON database
+        extModules = []
+        for module in project.modules:
+            extModules.append(obj2dict(module))
+        with open(os.path.join(path, 'modules.json'), 'w') as modFile:
+            modFile.write(json.dumps(extModules))
+    else:
+        # get the external modules from the external URLs
+        for url in project.external:
+            # get the external modules from the external URL
+            try:
+                extModules = json.loads(urlopen(
+                    urljoin(url, 'modules.json')).read().decode('utf8'))
+            except:
+                extModules = []
+                print('Could not open external URL: {}.'.format(url))
+            # convert modules defined in the JSON database to module objects
+            for extModule in extModules:
+                dict2obj(extModule, url)
